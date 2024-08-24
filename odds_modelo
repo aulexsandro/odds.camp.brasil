@@ -1,0 +1,482 @@
+#Apos ler os arquivos com os dados, execute:
+
+import pandas as pd
+import numpy as np
+from scipy.stats import skellam
+from itertools import combinations
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Convertendo a coluna 'Data' para datetime
+base_de_dados_brasileirao['Data'] = pd.to_datetime(base_de_dados_brasileirao['Data'], errors='coerce')
+
+# Filtrar apenas as temporadas desejadas (2020, 2021, 2022 e 2023)
+temporadas_desejadas = [2020, 2021, 2022, 2023]
+base_de_dados_2020_2023 = base_de_dados_brasileirao[base_de_dados_brasileirao['Temporada'].isin(temporadas_desejadas)].copy()
+
+# Calcular a diferença de dias a partir da data da partida
+base_de_dados_2020_2023['Diferenca_Dias'] = (pd.to_datetime('today') - base_de_dados_2020_2023['Data']).dt.days
+
+# Calcular pesos exponenciais com base na diferença de dias
+base_de_dados_2020_2023['Peso'] = np.exp(-base_de_dados_2020_2023['Diferenca_Dias'] / 365)
+
+# Calcular média de gols marcados em casa e contar vitórias em casa
+resumo_casa = base_de_dados_2020_2023.groupby(['Temporada', 'Casa']).agg(
+    Media_Gols_Casa=('GC', 'mean'),
+    Total_Gols_Casa=('GC', 'sum'),
+    Vitorias_Casa=('Res', lambda x: (x == 'H').sum())
+).reset_index()
+
+# Calcular média de gols marcados como visitante e contar vitórias como visitante
+resumo_visitante = base_de_dados_2020_2023.groupby(['Temporada', 'Visitante']).agg(
+    Media_Gols_Visitante=('GV', 'mean'),
+    Total_Gols_Visitante=('GV', 'sum'),
+    Vitorias_Visitante=('Res', lambda x: (x == 'A').sum())
+).reset_index()
+
+# Juntar os dataframes
+m_total = pd.merge(resumo_casa, resumo_visitante, how='outer', left_on=['Temporada', 'Casa'], right_on=['Temporada', 'Visitante'])
+
+# Adicionar a coluna 'Peso' ao DataFrame m_total
+m_total = pd.merge(m_total, base_de_dados_2020_2023[['Temporada', 'Casa', 'Peso']], how='left', left_on=['Temporada', 'Casa'], right_on=['Temporada', 'Casa'])
+
+# Calcular média de gols em casa e fora em cada temporada com peso
+m_total['Media_Gols_Casa'] = (m_total['Total_Gols_Casa'] * m_total['Peso']) / 19
+m_total['Media_Gols_Visitante'] = (m_total['Total_Gols_Visitante'] * m_total['Peso']) / 19
+
+# Calcular a média de gols total do time na temporada com peso
+m_total['Media_Gols_Temp'] = (m_total['Total_Gols_Casa'] + m_total['Total_Gols_Visitante']) / (38 * m_total['Peso'])
+
+# Adicionar a coluna 'Time' usando o código fornecido
+m_total['Time'] = m_total['Casa'].str.split(' x ').str[0]
+
+# Reordenar as colunas
+m_total = m_total[['Temporada', 'Time', 'Media_Gols_Temp', 'Media_Gols_Casa', 'Media_Gols_Visitante', 'Vitorias_Casa', 'Vitorias_Visitante']]
+
+# Criar uma lista com os 20 times escolhidos
+times_escolhidos = ['Flamengo RJ', 'Palmeiras', 'Sao Paulo', 'Fluminense', 'Gremio', 'Internacional', 'Athletico-PR', 'Corinthians', 'Fortaleza', 'Atletico-MG', 'Cruzeiro', 'America MG', 'Bahia', 'Cuiaba', 'Santos', 'Bragantino', 'Coritiba', 'Vasco', 'Goias', 'Botafogo RJ']
+
+# Criar todas as combinações de partidas entre os 20 times escolhidos
+partidas = list(combinations(times_escolhidos, 2))
+
+# Função para calcular as probabilidades para um confronto futuro
+def skellam_probs_futuro(time_a, time_b, dataframe):
+    # Selecione as médias de gols para o time A e o time B
+    media_gols_time_A = dataframe.loc[dataframe['Time'] == time_a, 'Media_Gols_Casa'].max()
+    media_gols_time_B = dataframe.loc[dataframe['Time'] == time_b, 'Media_Gols_Visitante'].max()
+
+    # Ajuste para evitar problemas com valores extremos
+    mu1 = max(0.01, media_gols_time_A)
+    mu2 = max(0.01, media_gols_time_B)
+
+    # Definir intervalo de diferença de gols
+    k_values = np.arange(-10, 11)
+
+    # Calcula as probabilidades para cada valor de k usando skellam
+    probs = skellam.pmf(k_values, mu1, mu2)
+
+    # Soma as probabilidades para cada evento
+    prob_vitoria_A = np.sum(probs[k_values > 0])
+    prob_empate = np.sum(probs[k_values == 0])
+    prob_vitoria_B = np.sum(probs[k_values < 0])
+
+    # Normaliza as probabilidades
+    total_probs = prob_vitoria_A + prob_empate + prob_vitoria_B
+
+    # Cria um DataFrame com as probabilidades normalizadas
+    result_df = pd.DataFrame({
+        'Evento': ['Vitória de A', 'Empate', 'Vitória de B'],
+        'Probabilidade': [prob_vitoria_A, prob_empate, prob_vitoria_B] / total_probs
+    })
+
+    return result_df
+
+# Calcular as probabilidades para cada par de times
+probabilidades = {}
+for partida in partidas:
+    time_a, time_b = partida
+    probabilidades[partida] = skellam_probs_futuro(time_a, time_b, m_total)
+
+# Exibir as probabilidades para cada partida
+for partida, probabilidade in probabilidades.items():
+    print(f"Partida: {partida}, Probabilidades: {probabilidade}")
+
+# Exibir as probabilidades para cada partida
+for partida, probabilidade in probabilidades.items():
+    print(f"Partida: {partida}, Probabilidades: {probabilidade}")
+
+# Transformar as probabilidades em odds
+odds = {}
+for partida, probabilidade in probabilidades.items():
+    odds[partida] = 1 / np.array(probabilidade['Probabilidade'])
+
+# Exibir as odds para cada partida
+for partida, odd in odds.items():
+    print(f"Partida: {partida}, Odds: {odd}")
+
+# Lista de times desejados
+times_desejados = ['Flamengo RJ', 'Palmeiras', 'Sao Paulo', 'Fluminense', 'Gremio', 'Internacional', 'Athletico-PR', 'Corinthians', 'Fortaleza', 'Atletico-MG', 'Cruzeiro', 'America MG', 'Bahia', 'Cuiaba', 'Santos', 'Bragantino', 'Coritiba', 'Vasco', 'Goias', 'Botafogo RJ']
+
+# Tamanho da matriz
+tamanho = len(times_desejados)
+
+# Matriz para armazenar as odds de vitória do mandante
+matriz_odds_mandante = np.zeros((tamanho, tamanho))
+
+# Matriz para armazenar as odds de vitória do visitante
+matriz_odds_visitante = np.zeros((tamanho, tamanho))
+
+# Loop pelos confrontos únicos entre os times desejados
+for i in range(tamanho):
+    for j in range(tamanho):
+        if i != j:  # Ignorar confronto do time contra si mesmo
+            time_mandante = times_desejados[i]
+            time_visitante = times_desejados[j]
+
+            # Calcula as probabilidades para o confronto
+            probs_futuro = skellam_probs_futuro(time_mandante, time_visitante, m_total)
+
+            # Transforma as probabilidades em odds
+            odds_futuro = 1 / np.array(probs_futuro['Probabilidade'])
+
+            # Preenche as matrizes com as odds de vitória do mandante e do visitante
+            matriz_odds_mandante[i, j] = odds_futuro[0]  # Odd de vitória do mandante
+
+            # Corrigir índices ao preencher a matriz de odds para o visitante
+            matriz_odds_visitante[i, j] = odds_futuro[2]  # Odd de vitória do visitante
+
+
+
+# Cria os DataFrames para exibir as tabelas
+tabela_odds_mandante = pd.DataFrame(matriz_odds_mandante, index=times_desejados, columns=times_desejados)
+tabela_odds_visitante = pd.DataFrame(matriz_odds_visitante, index=times_desejados, columns=times_desejados)
+
+# Exibe as tabelas no Python
+print("Tabela de Odds de Vitória do Mandante:")
+print(tabela_odds_mandante)
+
+print("\nTabela de Odds de Vitória do Visitante:")
+print(tabela_odds_visitante)
+
+# Vamos supor que 'tabela_odds_mandante' seja a tabela de odds calculadas pelo algoritmo
+# e 'tabela_odds_visitante' seja a tabela de odds visitantes calculadas pelo algoritmo
+
+odds_manuais = pd.read_excel('odds bet365.xlsx')
+
+# Inicializar um DataFrame vazio para armazenar as diferenças
+diferencas = pd.DataFrame()
+
+# Criar uma matriz para armazenar as probabilidades de vitória dos mandantes
+matriz_probabilidade_mandante = np.zeros((tamanho, tamanho))
+
+# Criar uma matriz para armazenar as probabilidades de vitória dos visitantes
+matriz_probabilidade_visitante = np.zeros((tamanho, tamanho))
+
+# Preencher as matrizes com as probabilidades fornecidas na planilha
+for i, time_mandante in enumerate(times_desejados):
+    for j, time_visitante in enumerate(times_desejados):
+        if time_mandante != time_visitante:
+            # Buscar as probabilidades correspondentes na planilha
+            prob_mandante_planilha = odds_manuais.loc[(odds_manuais['Time Mandante'] == time_mandante) & (odds_manuais['Time Visitante'] == time_visitante), 'Probabilidade de Vitória do Mandante'].values
+            prob_visitante_planilha = odds_manuais.loc[(odds_manuais['Time Mandante'] == time_mandante) & (odds_manuais['Time Visitante'] == time_visitante), 'Probabilidade de Vitória do Visitante'].values
+
+            # Preencher as matrizes com as probabilidades encontradas na planilha
+            if len(prob_mandante_planilha) > 0:
+                matriz_probabilidade_mandante[i, j] = prob_mandante_planilha[0]
+            if len(prob_visitante_planilha) > 0:
+                matriz_probabilidade_visitante[i, j] = prob_visitante_planilha[0]
+
+# Criar DataFrames para exibir as tabelas
+tabela_probabilidade_mandante = pd.DataFrame(matriz_probabilidade_mandante, index=times_desejados, columns=times_desejados)
+tabela_probabilidade_visitante = pd.DataFrame(matriz_probabilidade_visitante, index=times_desejados, columns=times_desejados)
+
+# Exibir as tabelas
+print("Tabela de Probabilidades de Vitória dos Mandantes:")
+print(tabela_probabilidade_mandante)
+
+print("\nTabela de Probabilidades de Vitória dos Visitantes:")
+print(tabela_probabilidade_visitante)
+
+# Calcular a diferença entre as probabilidades de vitória dos mandantes
+dif_probabilidade_mandante = tabela_odds_mandante - tabela_probabilidade_mandante
+
+# Calcular a diferença entre as probabilidades de vitória dos visitantes
+dif_probabilidade_visitante = tabela_odds_visitante - tabela_probabilidade_visitante
+
+# Exibir as tabelas de diferença
+print("Diferença entre as Probabilidades de Vitória dos Mandantes:")
+print(dif_probabilidade_mandante)
+
+print("\nDiferença entre as Probabilidades de Vitória dos Visitantes:")
+print(dif_probabilidade_visitante)
+
+# Calcular a diferença entre as probabilidades de vitória dos mandantes
+dif_probabilidade_mandante = tabela_odds_mandante - tabela_probabilidade_mandante
+
+# Calcular a diferença entre as probabilidades de vitória dos visitantes
+dif_probabilidade_visitante = tabela_odds_visitante - tabela_probabilidade_visitante
+
+# Exibir as tabelas de diferença
+print("Diferença entre as Probabilidades de Vitória dos Mandantes:")
+print(dif_probabilidade_mandante)
+
+print("\nDiferença entre as Probabilidades de Vitória dos Visitantes:")
+print(dif_probabilidade_visitante)
+
+# Matriz para armazenar as odds de vitória do mandante nos confrontos invertidos
+matriz_odds_mandante_invertido = np.zeros((tamanho, tamanho))
+
+# Matriz para armazenar as odds de vitória do visitante nos confrontos invertidos
+matriz_odds_visitante_invertido = np.zeros((tamanho, tamanho))
+
+# Loop pelos confrontos únicos entre os times desejados, invertendo a ordem dos times
+for i in range(tamanho):
+    for j in range(tamanho):
+        if i != j:  # Ignorar confronto do time contra si mesmo
+            time_mandante_invertido = times_desejados[j]
+            time_visitante_invertido = times_desejados[i]
+
+            # Preencher as matrizes com as odds de vitória do mandante e do visitante nos confrontos invertidos
+            matriz_odds_mandante_invertido[i, j] = tabela_odds_mandante.loc[time_mandante_invertido, time_visitante_invertido]
+            matriz_odds_visitante_invertido[i, j] = tabela_odds_visitante.loc[time_mandante_invertido, time_visitante_invertido]
+
+# Criar DataFrames para exibir as tabelas de odds dos mandantes e dos visitantes nos confrontos invertidos
+tabela_odds_mandante_invertido = pd.DataFrame(matriz_odds_mandante_invertido, index=times_desejados, columns=times_desejados)
+tabela_odds_visitante_invertido = pd.DataFrame(matriz_odds_visitante_invertido, index=times_desejados, columns=times_desejados)
+
+# Exibir as tabelas de odds dos mandantes e dos visitantes nos confrontos invertidos
+print("Tabela de Odds de Vitória do Mandante nos Confrontos Invertidos:")
+print(tabela_odds_mandante_invertido)
+
+print("\nTabela de Odds de Vitória do Visitante nos Confrontos Invertidos:")
+print(tabela_odds_visitante_invertido)
+
+# Matriz para armazenar as odds manuais de vitória do mandante nos confrontos invertidos
+matriz_odds_manuais_mandante_invertido = np.zeros((tamanho, tamanho))
+
+# Matriz para armazenar as odds manuais de vitória do visitante nos confrontos invertidos
+matriz_odds_manuais_visitante_invertido = np.zeros((tamanho, tamanho))
+
+# Preencher as matrizes com as odds manuais para os confrontos invertidos
+for i in range(tamanho):
+    for j in range(tamanho):
+        if i != j:  # Ignorar confronto do time contra si mesmo
+            time_mandante_invertido = times_desejados[j]
+            time_visitante_invertido = times_desejados[i]
+
+            # Buscar as odds manuais correspondentes na planilha
+            odds_mandante_invertido = odds_manuais.loc[(odds_manuais['Time Mandante'] == time_mandante_invertido) & (odds_manuais['Time Visitante'] == time_visitante_invertido), 'Probabilidade de Vitória do Mandante'].values
+            odds_visitante_invertido = odds_manuais.loc[(odds_manuais['Time Mandante'] == time_mandante_invertido) & (odds_manuais['Time Visitante'] == time_visitante_invertido), 'Probabilidade de Vitória do Visitante'].values
+
+            # Preencher as matrizes com as odds manuais encontradas na planilha
+            if len(odds_mandante_invertido) > 0:
+                matriz_odds_manuais_mandante_invertido[i, j] = odds_mandante_invertido[0]
+            if len(odds_visitante_invertido) > 0:
+                matriz_odds_manuais_visitante_invertido[i, j] = odds_visitante_invertido[0]
+
+# Criar DataFrames para exibir as tabelas de odds manuais dos mandantes e dos visitantes nos confrontos invertidos
+tabela_odds_manuais_mandante_invertido = pd.DataFrame(matriz_odds_manuais_mandante_invertido, index=times_desejados, columns=times_desejados)
+tabela_odds_manuais_visitante_invertido = pd.DataFrame(matriz_odds_manuais_visitante_invertido, index=times_desejados, columns=times_desejados)
+
+# Exibir as tabelas de odds manuais dos mandantes e dos visitantes nos confrontos invertidos
+print("Tabela de Odds Manuais de Vitória do Mandante nos Confrontos Invertidos:")
+print(tabela_odds_manuais_mandante_invertido)
+
+print("\nTabela de Odds Manuais de Vitória do Visitante nos Confrontos Invertidos:")
+print(tabela_odds_manuais_visitante_invertido)
+
+# Calcular a diferença entre as probabilidades de vitória dos mandantes nos confrontos invertidos
+dif_probabilidade_mandante_invertido = tabela_odds_mandante_invertido - tabela_odds_manuais_mandante_invertido
+
+# Calcular a diferença entre as probabilidades de vitória dos visitantes nos confrontos invertidos
+dif_probabilidade_visitante_invertido = tabela_odds_visitante_invertido - tabela_odds_manuais_visitante_invertido
+
+# Exibir as tabelas de diferença para os confrontos invertidos
+print("Diferença entre as Probabilidades de Vitória dos Mandantes nos Confrontos Invertidos:")
+print(dif_probabilidade_mandante_invertido)
+
+print("\nDiferença entre as Probabilidades de Vitória dos Visitantes nos Confrontos Invertidos:")
+print(dif_probabilidade_visitante_invertido)
+
+# Encontrar os valores mínimos e máximos de todas as diferenças
+min_diff = min(dif_probabilidade_mandante.min().min(), dif_probabilidade_visitante.min().min(),
+               dif_probabilidade_mandante_invertido.min().min(), dif_probabilidade_visitante_invertido.min().min())
+max_diff = max(dif_probabilidade_mandante.max().max(), dif_probabilidade_visitante.max().max(),
+               dif_probabilidade_mandante_invertido.max().max(), dif_probabilidade_visitante_invertido.max().max())
+
+# Tamanho da fonte para os annotations
+annot_font_size = 10
+
+# Heatmap para a diferença entre tabela_odds_mandante e tabela_probabilidade_mandante
+plt.figure(figsize=(12, 10))
+sns.heatmap(tabela_odds_mandante - tabela_probabilidade_mandante, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": annot_font_size}, vmin=min_diff, vmax=max_diff)
+plt.title('Diferença entre Odds do Modelo e da Bet365 para Mandantes')
+plt.xlabel('Visitantes')
+plt.ylabel('Mandantes')
+plt.show()
+
+# Heatmap para a diferença entre tabela_odds_visitante e tabela_probabilidade_visitante
+plt.figure(figsize=(12, 10))
+sns.heatmap(tabela_odds_visitante - tabela_probabilidade_visitante, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": annot_font_size}, vmin=min_diff, vmax=max_diff)
+plt.title('Diferença entre Odds do Modelo e da Bet365 para Visitantes')
+plt.xlabel('Visitantes')
+plt.ylabel('Mandantes')
+plt.show()
+
+# Heatmap para a diferença entre as odds de vitória do mandante nos confrontos invertidos
+plt.figure(figsize=(12, 10))
+sns.heatmap(tabela_odds_mandante_invertido - tabela_odds_manuais_mandante_invertido, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": annot_font_size}, vmin=min_diff, vmax=max_diff)
+plt.title('')
+plt.xlabel('Mandantes')
+plt.ylabel('Visitantes')
+plt.show()
+
+# Heatmap para a diferença entre as odds de vitória do visitante nos confrontos invertidos
+plt.figure(figsize=(12, 10))
+sns.heatmap(tabela_odds_visitante_invertido - tabela_odds_manuais_visitante_invertido, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": annot_font_size}, vmin=min_diff, vmax=max_diff)
+plt.title('')
+plt.xlabel('Mandantes')
+plt.ylabel('Visitantes')
+plt.show()
+
+# Títulos para os boxplots
+titulos = ['Odds de mandantes pelo algoritmo',
+           'Odds de mandantes pela Bet365',
+           'Odds de visitantes pelo algoritmo',
+           'Odds de visitantes pela Bet365']
+
+# Dados para os boxplots
+dados_boxplots = [tabela_odds_mandante.values.flatten(), tabela_probabilidade_mandante.values.flatten(),
+                  tabela_odds_visitante.values.flatten(), tabela_probabilidade_visitante.values.flatten()]
+
+# Calcular o limite superior do eixo y
+limite_superior = max([max(dados) for dados in dados_boxplots])
+
+# Criar os boxplots
+plt.figure(figsize=(12, 10))
+for i in range(4):
+    plt.subplot(2, 2, i+1)
+    sns.boxplot(y=dados_boxplots[i])
+    plt.title(titulos[i])
+    plt.ylim(0, limite_superior)  # Definir o mesmo limite superior para todos os boxplots
+    plt.ylabel('Odds')
+plt.tight_layout()
+plt.show()
+
+
+# Títulos para os boxplots
+titulos_invertidos = ['Odds de mandantes pelo algoritmo (returno)',
+                      'Odds de mandantes pela Bet365 (returno)',
+                      'Odds de visitantes pelo algoritmo (returno)',
+                      'Odds de visitantes pela Bet365 (returno)']
+
+# Dados para os boxplots
+dados_boxplots_invertidos = [tabela_odds_mandante_invertido.values.flatten(), tabela_odds_manuais_mandante_invertido.values.flatten(),
+                             tabela_odds_visitante_invertido.values.flatten(), tabela_odds_manuais_visitante_invertido.values.flatten()]
+
+# Calcular o limite superior do eixo y
+limite_superior_invertido = max([max(dados) for dados in dados_boxplots_invertidos])
+
+# Criar os boxplots
+plt.figure(figsize=(12, 10))
+for i in range(4):
+    plt.subplot(2, 2, i+1)
+    sns.boxplot(y=dados_boxplots_invertidos[i])
+    plt.title(titulos_invertidos[i])
+    plt.ylim(0, limite_superior_invertido)  # Definir o mesmo limite superior para todos os boxplots
+    plt.ylabel('Odds')
+plt.tight_layout()
+plt.show()
+
+# Calcular as diferenças percentuais
+dif_percentual_mandante = ((tabela_odds_mandante - tabela_probabilidade_mandante) / tabela_odds_mandante) * 100
+dif_percentual_visitante = ((tabela_odds_visitante - tabela_probabilidade_visitante) / tabela_odds_visitante) * 100
+
+# Calcular as diferenças percentuais para os confrontos invertidos
+dif_percentual_mandante_invertido = ((tabela_odds_mandante_invertido - tabela_odds_manuais_mandante_invertido) / tabela_odds_manuais_mandante_invertido) * 100
+dif_percentual_visitante_invertido = ((tabela_odds_visitante_invertido - tabela_odds_manuais_visitante_invertido) / tabela_odds_manuais_visitante_invertido) * 100
+
+# Calcular os valores mínimos e máximos das diferenças percentuais em todos os dados
+min_percent_diff = min(dif_percentual_mandante.min().min(), dif_percentual_visitante.min().min(),
+                       dif_percentual_mandante_invertido.min().min(), dif_percentual_visitante_invertido.min().min())
+max_percent_diff = max(dif_percentual_mandante.max().max(), dif_percentual_visitante.max().max(),
+                       dif_percentual_mandante_invertido.max().max(), dif_percentual_visitante_invertido.max().max())
+
+# Heatmap para a diferença percentual entre as odds de vitória do mandante
+plt.figure(figsize=(12, 10))
+sns.heatmap(dif_percentual_mandante, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": 8}, vmin=min_percent_diff, vmax=max_percent_diff)
+plt.title('')
+plt.xlabel('Visitantes')
+plt.ylabel('Mandantes')
+plt.show()
+
+# Heatmap para a diferença percentual entre as odds de vitória do visitante
+plt.figure(figsize=(12, 10))
+sns.heatmap(dif_percentual_visitante, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": 8}, vmin=min_percent_diff, vmax=max_percent_diff)
+plt.title('')
+plt.xlabel('Visitantes')
+plt.ylabel('Mandantes')
+plt.show()
+
+
+# Heatmap para a diferença percentual entre as odds de vitória do mandante nos confrontos invertidos
+plt.figure(figsize=(12, 10))
+sns.heatmap(dif_percentual_mandante_invertido, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": 8}, vmin=min_percent_diff, vmax=max_percent_diff)
+plt.title('')
+plt.xlabel('Visitantes')
+plt.ylabel('Mandantes')
+plt.show()
+
+
+# Heatmap para a diferença percentual entre as odds de vitória do visitante nos confrontos invertidos
+plt.figure(figsize=(12, 10))
+sns.heatmap(dif_percentual_visitante_invertido, annot=True, cmap='coolwarm', fmt=".2f",
+            annot_kws={"size": 8}, vmin=min_percent_diff, vmax=max_percent_diff)
+plt.title('')
+plt.xlabel('Visitantes')
+plt.ylabel('Mandantes')
+plt.show()
+
+# Define o tamanho da fonte para os annotations
+annot_font_size = 10
+
+# Dados para os boxplots
+dados_boxplots = [
+    dif_probabilidade_mandante.values.flatten(),
+    dif_probabilidade_visitante.values.flatten(),
+    dif_probabilidade_mandante_invertido.values.flatten(),
+    dif_probabilidade_visitante_invertido.values.flatten()
+]
+
+# Títulos dos boxplots
+titulos = [
+    'Mandantes - 1º turno',
+    'Visitantes - 1º turno',
+    'Mandantes - 2º turno',
+    'Visitantes - 2º turno'
+]
+
+# Criação da figura
+plt.figure(figsize=(14, 7))
+
+# Criação do boxplot
+sns.boxplot(data=dados_boxplots)
+
+# Ajuste dos rótulos do eixo x
+plt.xticks(ticks=range(len(titulos)), labels=titulos)
+
+# Adição da linha pontilhada no zero
+plt.axhline(y=0, linestyle='--', color='gray')
+
+# Ajuste do rótulo do eixo y
+plt.ylabel('Diferença entre as odds')
+
+# Exibe a figura
+plt.show()
